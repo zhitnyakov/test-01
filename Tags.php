@@ -63,27 +63,43 @@ class Tags extends CI_Controller
 			$users_ids = [$this->user['id']];
 		}
 
-		foreach ($tables_to_search_tags_from as $table) {
-			$items = $this->db->select('tags')
-				->where_in('user_id', $users_ids)
-				->get($table)
-				->result_array();
-			foreach ($items as $item) {
-				$item_tags = json_decode($item['tags'], true) ?? [];
-				foreach ($item_tags as $tag) {
-					if (!in_array($tag, $all_tags)) {
-						$all_tags[] = $tag;
-					}
-				}
-			}
-		}
 
-		$all_tags = array_values(
-			array_diff(
-				$all_tags ?? [],
-				json_decode($this->user['excluded_tags'], true) ?? []
-			)
-		);
+        $this->load->driver('cache');
+
+        //сформируем ключ для кеша из списка таблиц в которых будет призведен поиск и списка пользователей
+        //отсортируем массив с id пользователей, что избежать формирования другого ключа на одном и том же списке пользователей
+		sort($users_ids);
+		// объеденяем все в один строковый ключ
+        $cacheKey = implode(',', $tables_to_search_tags_from) . ":" . implode(',', $users_ids);
+        //для кранкости ключа получаем его хеш
+        $cacheKey = sha1($cacheKey);
+        if (!$all_tags = $this->cache->memcached->get($cacheKey)) {
+            foreach ($tables_to_search_tags_from as $table) {
+                $items = $this->db->select('tags')
+                    ->where_in('user_id', $users_ids)
+                    ->get($table)
+                    ->result_array();
+                foreach ($items as $item) {
+                    $item_tags = json_decode($item['tags'], true) ?? [];
+                    foreach ($item_tags as $tag) {
+                        if (!in_array($tag, $all_tags)) {
+                            $all_tags[] = $tag;
+                        }
+                    }
+                }
+            }
+
+            $this->cache->memcached->save($cacheKey, json_encode($all_tags), 300);
+        } else {
+            $all_tags = json_decode($all_tags, true) ?? [];
+        }
+
+        $all_tags = array_values(
+            array_diff(
+                $all_tags ?? [],
+                json_decode($this->user['excluded_tags'], true) ?? []
+            )
+        );
 
 		$this->api_response(
 			[
